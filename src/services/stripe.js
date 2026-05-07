@@ -85,7 +85,12 @@ async function handleWebhook(rawBody, signature) {
 }
 
 function isActive(user) {
-  return user && (user.subscription_status === 'active' || user.subscription_status === 'trialing');
+  if (!user) return false;
+  if (user.subscription_status === 'active' || user.subscription_status === 'trialing') return true;
+  // Dev/owner accounts bypass the paywall entirely.
+  const devIds = require('../config').DEV_TELEGRAM_IDS || [];
+  if (user.telegram_id && devIds.includes(parseInt(user.telegram_id, 10))) return true;
+  return false;
 }
 
 // Polling fallback: while there is no HTTPS webhook, periodically reconcile

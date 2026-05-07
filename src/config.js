@@ -24,4 +24,8 @@ module.exports = {
 
   PORT: parseInt(process.env.PORT || '3017', 10),
   ADMIN_TELEGRAM_ID: process.env.ADMIN_TELEGRAM_ID || null,
+
+  // Comma-separated Telegram user IDs that bypass the paywall (dev/owner accounts).
+  DEV_TELEGRAM_IDS: (process.env.DEV_TELEGRAM_IDS || '')
+    .split(',').map(s => s.trim()).filter(Boolean).map(s => parseInt(s, 10)).filter(Number.isFinite),
 };

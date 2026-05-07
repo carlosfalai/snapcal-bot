@@ -1,8 +1,9 @@
 const { query } = require('../db');
 const { hash, normalizePhone, checkLoginRate, recordLoginAttempt } = require('../utils/auth');
-const { intInRange, floatInRange, parseSex, parseGoal } = require('../utils/validators');
+const { intInRange, floatInRange, parseSex, parseGoal, parseWeightKg, parseHeightCm } = require('../utils/validators');
 const { tdee, dailyTarget, bmi, bmiLabel } = require('../utils/bmi');
 const { createCheckoutSession } = require('../services/stripe');
+const cfg = require('../config');
 
 const STEPS = ['phone', 'pin', 'pin_confirm', 'weight', 'height', 'age', 'sex', 'goal', 'paywall'];
 
@@ -67,7 +68,7 @@ async function handleMessage(bot, msg) {
     }
     data.phone_hash = hash(digits);
     await setPending(telegramId, 'pin', data);
-    await bot.sendMessage(chatId, 'Now choose a 4-digit PIN. Send 4 digits.');
+    await bot.sendMessage(chatId, 'Now choose a 4-digit PIN. Send 4 digits. (Will be deleted from chat after.)');
     return true;
   }
 
@@ -96,22 +97,22 @@ async function handleMessage(bot, msg) {
       return true;
     }
     await setPending(telegramId, 'weight', data);
-    await bot.sendMessage(chatId, 'Your weight in kg (e.g. 78.5).');
+    await bot.sendMessage(chatId, 'Your weight. Examples: 78kg, 78.5, 180lbs, 12st 4lb.');
     return true;
   }
 
   if (step === 'weight') {
-    const w = floatInRange(text, 30, 300);
-    if (w == null) { await bot.sendMessage(chatId, 'Send weight in kg between 30 and 300.'); return true; }
+    const w = parseWeightKg(text);
+    if (w == null) { await bot.sendMessage(chatId, 'Could not parse weight. Send a value between 30-300 kg or 66-660 lb. Examples: 78, 78kg, 180lbs.'); return true; }
     data.weight_kg = w;
     await setPending(telegramId, 'height', data);
-    await bot.sendMessage(chatId, 'Your height in cm (e.g. 175).');
+    await bot.sendMessage(chatId, 'Your height. Examples: 175cm, 175, 5ft10in, 5\'10".');
     return true;
   }
 
   if (step === 'height') {
-    const h = intInRange(text, 100, 230);
-    if (h == null) { await bot.sendMessage(chatId, 'Send height in cm between 100 and 230.'); return true; }
+    const h = parseHeightCm(text);
+    if (h == null) { await bot.sendMessage(chatId, 'Could not parse height. Send a value between 100-230 cm or 39-90 in. Examples: 175, 175cm, 5ft10in.'); return true; }
     data.height_cm = h;
     await setPending(telegramId, 'age', data);
     await bot.sendMessage(chatId, 'Your age in years.');
@@ -162,6 +163,22 @@ async function handleMessage(bot, msg) {
        data.age, data.sex, data.goal, t, target]
     );
     const userId = ins.rows[0].id;
+    const isDev = (cfg.DEV_TELEGRAM_IDS || []).includes(parseInt(telegramId, 10));
+    if (isDev) {
+      await query(
+        "UPDATE users SET subscription_status = 'active', subscription_period_end = NOW() + INTERVAL '100 years', updated_at = NOW() WHERE id = $1",
+        [userId]
+      );
+      await clearPending(telegramId);
+      await bot.sendMessage(chatId,
+        `Profile saved.\n` +
+        `BMI: ${b ?? 'n/a'} (${bmiLabel(b) || 'n/a'})\n` +
+        `Daily target: ${target} kcal\n` +
+        `TDEE: ${t} kcal\n\n` +
+        `Dev account — paywall bypassed. Send a meal photo to start logging.`
+      );
+      return true;
+    }
     const checkoutUrl = await createCheckoutSession({ id: userId, telegram_id: telegramId });
     await setPending(telegramId, 'paywall', { user_id: userId });
     await bot.sendMessage(chatId,
