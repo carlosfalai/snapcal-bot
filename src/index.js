@@ -1,7 +1,7 @@
 const fs = require('fs');
 const express = require('express');
 const cfg = require('./config');
-const { handleWebhook } = require('./services/stripe');
+const { handleWebhook, pollPendingActivations } = require('./services/stripe');
 const { bot, registerCommands } = require('./bot');
 const { query } = require('./db');
 
@@ -114,3 +114,8 @@ async function pushDailySummaries() {
   } catch (e) { console.error('[summary] error:', e.message); }
 }
 setInterval(pushDailySummaries, 60 * 60 * 1000);
+
+// Stripe polling fallback — reconciles subscription status every 30s
+// when the HTTPS webhook isn't yet wired. Safe to keep enabled even with webhooks
+// (idempotent: only updates rows whose status differs).
+setInterval(() => { pollPendingActivations().catch(e => console.error('[stripe-poll]', e.message)); }, 30 * 1000);

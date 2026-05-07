@@ -88,4 +88,37 @@ function isActive(user) {
   return user && (user.subscription_status === 'active' || user.subscription_status === 'trialing');
 }
 
-module.exports = { createCheckoutSession, handleWebhook, isActive };
+// Polling fallback: while there is no HTTPS webhook, periodically reconcile
+// subscription status by querying Stripe directly. Idempotent.
+async function pollPendingActivations() {
+  const r = await query(
+    `SELECT id, stripe_customer_id, telegram_id, subscription_status
+       FROM users
+      WHERE stripe_customer_id IS NOT NULL
+        AND (subscription_status IS NULL OR subscription_status NOT IN ('active','trialing','canceled'))
+      ORDER BY updated_at ASC LIMIT 50`
+  );
+  for (const u of r.rows) {
+    try {
+      const subs = await stripe.subscriptions.list({ customer: u.stripe_customer_id, status: 'all', limit: 5 });
+      const sub = subs.data.find(s => ['active','trialing','past_due','unpaid','canceled'].includes(s.status));
+      if (!sub) continue;
+      const periodEnd = sub.current_period_end ? new Date(sub.current_period_end * 1000) : null;
+      await query(
+        'UPDATE users SET subscription_status = $1, subscription_period_end = $2, updated_at = NOW() WHERE id = $3',
+        [sub.status, periodEnd, u.id]
+      );
+      if ((sub.status === 'active' || sub.status === 'trialing') && u.subscription_status !== sub.status) {
+        // Notify the user via the bot — lazy require to avoid circular imports.
+        try {
+          const { bot } = require('../bot');
+          await bot.sendMessage(u.telegram_id, 'Subscription active. Send a meal photo to start logging.');
+        } catch {}
+      }
+    } catch (e) {
+      console.error('[stripe-poll]', u.id, e.message);
+    }
+  }
+}
+
+module.exports = { createCheckoutSession, handleWebhook, isActive, pollPendingActivations };
